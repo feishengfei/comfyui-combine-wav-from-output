@@ -47,8 +47,9 @@ class CombineTtsAudio:
         if not target_dir.is_dir():
             raise NotADirectoryError(f"音频目录不存在：{target_dir}")
 
-        dir_name = target_dir.name  # 获取目录名，用作输出文件名
-        output_file = target_dir / f"{dir_name}.{out_format}"
+        dir_name = target_dir.name
+        parent_dir = target_dir.parent
+        output_file = parent_dir / f"{dir_name}.{out_format}"
 
         # 动态正则： ^前缀_数字.后缀
         escaped_prefix = re.escape(file_prefix)
