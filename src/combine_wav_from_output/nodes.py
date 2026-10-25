@@ -1,118 +1,96 @@
+import os
+import re
+from pathlib import Path
 from inspect import cleandoc
-class Example:
+from pydub import AudioSegment
+
+
+class CombineTtsAudio:
     """
-    A example node
-
-    Class methods
-    -------------
-    INPUT_TYPES (dict):
-        Tell the main program input parameters of nodes.
-    IS_CHANGED:
-        optional method to control when the node is re executed.
-
-    Attributes
-    ----------
-    RETURN_TYPES (`tuple`):
-        The type of each element in the output tulple.
-    RETURN_NAMES (`tuple`):
-        Optional: The name of each output in the output tulple.
-    FUNCTION (`str`):
-        The name of the entry-point method. For example, if `FUNCTION = "execute"` then it will run Example().execute()
-    OUTPUT_NODE ([`bool`]):
-        If this node is an output node that outputs a result/image from the graph. The SaveImage node is an example.
-        The backend iterates on these output nodes and tries to execute all their parents if their parent graph is properly connected.
-        Assumed to be False if not present.
-    CATEGORY (`str`):
-        The category the node should appear in the UI.
-    execute(s) -> tuple || None:
-        The entry point method. The name of this method must be the same as the value of property `FUNCTION`.
-        For example, if `FUNCTION = "execute"` then this method's name must be `execute`, if `FUNCTION = "foo"` then it must be `foo`.
+    将目录下 tts_000.wav / tts_001.wav 按数字序号升序合并音频
+    输入目录：tts分片音频存放目录；
+    in_suffix：原始分片文件后缀 wav / mp3
+    out_format：合并输出格式 wav / mp3
+    delete_source：合并完成后是否删除原始分片tts_xxx文件
+    输出文件：输入目录下，以目录名作为文件名，例：/xxx/myfolder → /xxx/myfolder/myfolder.wav
     """
-    def __init__(self):
-        pass
-
     @classmethod
     def INPUT_TYPES(s):
-        """
-            Return a dictionary which contains config for all input fields.
-            Some types (string): "MODEL", "VAE", "CLIP", "CONDITIONING", "LATENT", "IMAGE", "INT", "STRING", "FLOAT".
-            Input types "INT", "STRING" or "FLOAT" are special values for fields on the node.
-            The type can be a list for selection.
-
-            Returns: `dict`:
-                - Key input_fields_group (`string`): Can be either required, hidden or optional. A node class must have property `required`
-                - Value input_fields (`dict`): Contains input fields config:
-                    * Key field_name (`string`): Name of a entry-point method's argument
-                    * Value field_config (`tuple`):
-                        + First value is a string indicate the type of field or a list for selection.
-                        + Secound value is a config for type "INT", "STRING" or "FLOAT".
-        """
         return {
             "required": {
-                "image": ("Image", { "tooltip": "This is an image"}),
-                "int_field": ("INT", {
-                    "default": 0,
-                    "min": 0, #Minimum value
-                    "max": 4096, #Maximum value
-                    "step": 64, #Slider's step
-                    "display": "number" # Cosmetic only: display as "number" or "slider"
+                "audio_dir": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "tooltip": "tts分片音频所在目录，填写绝对路径"
                 }),
-                "float_field": ("FLOAT", {
-                    "default": 1.0,
-                    "min": 0.0,
-                    "max": 10.0,
-                    "step": 0.01,
-                    "round": 0.001, #The value represeting the precision to round to, will be set to the step value by default. Can be set to False to disable rounding.
-                    "display": "number"}),
-                "print_to_screen": (["enable", "disable"],),
-                "string_field": ("STRING", {
-                    "multiline": False, #True if you want the field to look like the one on the ClipTextEncode node
-                    "default": "Hello World!"
-                }),
-            },
+                "in_suffix": (["wav", "mp3"], {"default": "wav", "tooltip": "待合并分片文件的后缀"}),
+                "out_format": (["wav", "mp3"], {"default": "wav", "tooltip": "合并输出音频格式"}),
+                "delete_source": ("BOOLEAN", {"default": False, "tooltip": "合并完成后删除tts_000.*等分片源文件"})
+            }
         }
 
-    RETURN_TYPES = ("IMAGE",)
-    #RETURN_NAMES = ("image_output_name",)
+    RETURN_TYPES = ()
+    FUNCTION = "run"
+    CATEGORY = "AudioTools"
+    OUTPUT_NODE = True
     DESCRIPTION = cleandoc(__doc__)
-    FUNCTION = "test"
 
-    #OUTPUT_NODE = False
-    #OUTPUT_TOOLTIPS = ("",) # Tooltips for the output node
+    async def run(self, audio_dir: str, in_suffix: str, out_format: str, delete_source: bool):
+        target_dir = Path(audio_dir).absolute()
+        if not target_dir.is_dir():
+            raise NotADirectoryError(f"音频目录不存在：{target_dir}")
 
-    CATEGORY = "Example"
+        dir_name = target_dir.name  # 获取目录名，用作输出文件名
+        output_file = target_dir / f"{dir_name}.{out_format}"
 
-    def test(self, image, string_field, int_field, float_field, print_to_screen):
-        if print_to_screen == "enable":
-            print(f"""Your input contains:
-                string_field aka input text: {string_field}
-                int_field: {int_field}
-                float_field: {float_field}
-            """)
-        #do some processing on the image, in this example I just invert it
-        image = 1.0 - image
-        return (image,)
+        # 匹配 tts_数字.后缀 正则，捕获序号
+        pattern = re.compile(r"^tts_(\d+)\." + re.escape(in_suffix) + r"$", re.IGNORECASE)
+        matched = []
 
-    """
-        The node will always be re executed if any of the inputs change but
-        this method can be used to force the node to execute again even when the inputs don't change.
-        You can make this node return a number or a string. This value will be compared to the one returned the last time the node was
-        executed, if it is different the node will be executed again.
-        This method is used in the core repo for the LoadImage node where they return the image hash as a string, if the image hash
-        changes between executions the LoadImage node is executed again.
-    """
-    #@classmethod
-    #def IS_CHANGED(s, image, string_field, int_field, float_field, print_to_screen):
-    #    return ""
+        for fname in os.listdir(target_dir):
+            m = pattern.match(fname)
+            if m:
+                seq = int(m.group(1))
+                matched.append((seq, fname))
+
+        if len(matched) == 0:
+            raise FileNotFoundError(f"目录内未找到匹配 tts_xxx.{in_suffix} 的分片音频文件；目录：{target_dir}")
+
+        # 按数字序号升序排序
+        matched.sort(key=lambda x: x[0])
+        sorted_files = [target_dir / fn for _, fn in matched]
+        print(f"\n===== CombineTtsAudio: 找到 {len(sorted_files)} 个分片音频 =====")
+        for f in sorted_files:
+            print(f"  > {f.name}")
+
+        # 音频合并
+        combined = AudioSegment.empty()
+        for file_path in sorted_files:
+            seg = AudioSegment.from_file(file_path, format=in_suffix)
+            combined += seg
+
+        # 导出合并后的音频
+        combined.export(output_file, format=out_format)
+        print(f"✅ 合并完成，输出文件: {output_file}")
+
+        # 是否删除源分片文件
+        if delete_source:
+            print(f"🗑️ 开启删除源分片，开始清理tts分片文件……")
+            for f in sorted_files:
+                try:
+                    os.unlink(f)
+                    print(f"    deleted: {f.name}")
+                except Exception as e:
+                    print(f"⚠️ 删除失败 {f.name}: {str(e)}")
+
+        print(f"===== CombineTtsAudio: 全部处理结束 =====\n")
+        return {}
 
 
-# A dictionary that contains all nodes you want to export with their names
-# NOTE: names should be globally unique
 NODE_CLASS_MAPPINGS = {
-    "Example": Example
+    "CombineTtsAudio": CombineTtsAudio
 }
 
-# A dictionary that contains the friendly/humanly readable titles for the nodes
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Example": "Example Node"
+    "CombineTtsAudio": "TTS分片音频合并(tts_xxx)"
 }
