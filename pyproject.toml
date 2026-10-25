@@ -14,7 +14,8 @@ license = {text = "MIT license"}
 requires-python = ">=3.10"
 classifiers = []
 dependencies = [
-"pydub>=0.25.1"
+    "pydub>=0.25.1",
+    "mutagen>=1.47.0"
 ]
 
 
