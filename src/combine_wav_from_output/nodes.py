@@ -18,6 +18,7 @@ class CombineTtsAudio:
     in_suffix：原始分片文件后缀 wav / mp3
     out_format：合并输出格式 wav / mp3
     mp3_bitrate：mp3输出恒定码率，仅mp3生效；腾讯音乐专栏最低要求256k
+    force_stereo：开启则强制转为双声道，单声道音频会复制填充左右声道；默认关闭
     delete_source：合并完成后是否删除原始分片文件
     title：【可选】单曲名称，mp3写入ID3 TIT2标题标签
     lyric_text：【可选】歌词多行字符串；仅mp3生效，写入ID3 USLT内嵌歌词
@@ -51,6 +52,7 @@ class CombineTtsAudio:
             },
             "optional": {
                 "mp3_bitrate": (["128k","192k","256k","320k"], {"default":"256k", "tooltip":"仅out_format=mp3生效；腾讯音乐专栏最低要求256k，CBR恒定码率"}),
+                "force_stereo": ("BOOLEAN", {"default": False, "tooltip":"强制转为双声道；单声道音频会复制内容填充左右声道，腾讯音乐专栏需要立体声，默认关闭"}),
                 "title": ("STRING", {
                     "default": "",
                     "tooltip": "单曲名称，mp3模式写入ID3标题(TIT2)标签；wav忽略"
@@ -81,6 +83,7 @@ class CombineTtsAudio:
                   delete_source: bool,
                   trigger,
                   mp3_bitrate="256k",
+                  force_stereo=False,
                   title="",
                   lyric_text="",
                   cover_image=None,
@@ -121,13 +124,18 @@ class CombineTtsAudio:
             seg = AudioSegment.from_file(file_path, format=in_suffix)
             combined += seg
 
+        # 强制转为立体声：单声道复制填充左右声道
+        if force_stereo:
+            print(f"ℹ️ force_stereo已开启，将音频强制转换为双声道(stereo)")
+            combined = combined.set_channels(2)
+
         # 根据输出格式设置码率
         if out_format == "mp3":
             combined.export(output_file, format="mp3", bitrate=mp3_bitrate)
-            print(f"✅ 合并完成，输出文件: {output_file} | mp3 CBR bitrate={mp3_bitrate}")
+            print(f"✅ 合并完成，输出文件: {output_file} | mp3 CBR bitrate={mp3_bitrate} | force_stereo={force_stereo}")
         else:
             combined.export(output_file, format=out_format)
-            print(f"✅ 合并完成，输出文件: {output_file}")
+            print(f"✅ 合并完成，输出文件: {output_file} | force_stereo={force_stereo}")
 
         print(f"ℹ️ 输出音频父目录: {parent_dir}")
 
