@@ -17,6 +17,7 @@ class CombineTtsAudio:
     file_prefix：分片文件前缀，默认 tts
     in_suffix：原始分片文件后缀 wav / mp3
     out_format：合并输出格式 wav / mp3
+    mp3_bitrate：mp3输出恒定码率，仅mp3生效；腾讯音乐专栏最低要求256k
     delete_source：合并完成后是否删除原始分片文件
     title：【可选】单曲名称，mp3写入ID3 TIT2标题标签
     lyric_text：【可选】歌词多行字符串；仅mp3生效，写入ID3 USLT内嵌歌词
@@ -25,7 +26,6 @@ class CombineTtsAudio:
     album: ID3专辑标签(mp3 only)
     year: ID3年份标签(mp3 only)
     trigger：时序触发端口，连接上游输出，保证磁盘文件全部写完再执行合并
-
     输出：
         output_audio_path：合成后音频完整磁盘路径
         output_parent_dir：合成音频文件所在父目录路径
@@ -50,6 +50,7 @@ class CombineTtsAudio:
                 "trigger": ("*", {"tooltip": "时序触发端口，连接上游输出，仅用于等待全部文件保存到磁盘，不读取数据"})
             },
             "optional": {
+                "mp3_bitrate": (["128k","192k","256k","320k"], {"default":"256k", "tooltip":"仅out_format=mp3生效；腾讯音乐专栏最低要求256k，CBR恒定码率"}),
                 "title": ("STRING", {
                     "default": "",
                     "tooltip": "单曲名称，mp3模式写入ID3标题(TIT2)标签；wav忽略"
@@ -65,7 +66,6 @@ class CombineTtsAudio:
                 "year": ("STRING", {"default": "year", "tooltip": "ID3 year 年份标签(mp3 only)"}),
             }
         }
-
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("output_audio_path", "output_parent_dir")
     FUNCTION = "run"
@@ -80,13 +80,13 @@ class CombineTtsAudio:
                   out_format: str,
                   delete_source: bool,
                   trigger,
+                  mp3_bitrate="256k",
                   title="",
                   lyric_text="",
                   cover_image=None,
                   artist="artist",
                   album="album",
                   year="year"):
-
         target_dir = Path(audio_dir).absolute()
         if not target_dir.is_dir():
             raise NotADirectoryError(f"音频目录不存在：{target_dir}")
@@ -98,7 +98,6 @@ class CombineTtsAudio:
         escaped_prefix = re.escape(file_prefix)
         pattern = re.compile(rf"^{escaped_prefix}_(\d+)\.{re.escape(in_suffix)}$", re.IGNORECASE)
         matched = []
-
         for fname in os.listdir(target_dir):
             m = pattern.match(fname)
             if m:
@@ -122,8 +121,14 @@ class CombineTtsAudio:
             seg = AudioSegment.from_file(file_path, format=in_suffix)
             combined += seg
 
-        combined.export(output_file, format=out_format)
-        print(f"✅ 合并完成，输出文件: {output_file}")
+        # 根据输出格式设置码率
+        if out_format == "mp3":
+            combined.export(output_file, format="mp3", bitrate=mp3_bitrate)
+            print(f"✅ 合并完成，输出文件: {output_file} | mp3 CBR bitrate={mp3_bitrate}")
+        else:
+            combined.export(output_file, format=out_format)
+            print(f"✅ 合并完成，输出文件: {output_file}")
+
         print(f"ℹ️ 输出音频父目录: {parent_dir}")
 
         # -------- MP3 ID3标签处理：仅输出为mp3时执行 --------
@@ -186,7 +191,6 @@ class CombineTtsAudio:
                     print(f"⚠️ 删除失败 {f.name}: {str(e)}")
 
         print(f"===== CombineTtsAudio: 全部处理结束 =====\n")
-
         return (str(output_file), str(parent_dir))
 
 
