@@ -26,7 +26,9 @@ class CombineTtsAudio:
     year: ID3年份标签(mp3 only)
     trigger：时序触发端口，连接上游输出，保证磁盘文件全部写完再执行合并
 
-    输出：output_audio_path：合成后音频完整磁盘路径
+    输出：
+        output_audio_path：合成后音频完整磁盘路径
+        output_parent_dir：合成音频文件所在父目录路径
     示例：输入目录 /a/b/02丁香结，输出文件 /a/b/02丁香结.mp3（输出到目录的父级，不放进分片目录内部）
     """
     @classmethod
@@ -45,7 +47,7 @@ class CombineTtsAudio:
                 "in_suffix": (["wav", "mp3"], {"default": "wav", "tooltip": "待合并分片文件的后缀"}),
                 "out_format": (["wav", "mp3"], {"default": "wav", "tooltip": "合并输出音频格式"}),
                 "delete_source": ("BOOLEAN", {"default": False, "tooltip": "合并完成后删除 <prefix>_000.* 等分片源文件"}),
-                "trigger": ("*", {"tooltip": "时序触发端口，连接上游节点输出，仅用于等待全部文件保存到磁盘，不读取数据"})
+                "trigger": ("*", {"tooltip": "时序触发端口，连接上游输出，仅用于等待全部文件保存到磁盘，不读取数据"})
             },
             "optional": {
                 "title": ("STRING", {
@@ -64,8 +66,8 @@ class CombineTtsAudio:
             }
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("output_audio_path",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("output_audio_path", "output_parent_dir")
     FUNCTION = "run"
     CATEGORY = "AudioTools"
     OUTPUT_NODE = True
@@ -122,6 +124,7 @@ class CombineTtsAudio:
 
         combined.export(output_file, format=out_format)
         print(f"✅ 合并完成，输出文件: {output_file}")
+        print(f"ℹ️ 输出音频父目录: {parent_dir}")
 
         # -------- MP3 ID3标签处理：仅输出为mp3时执行 --------
         if out_format == "mp3":
@@ -184,7 +187,7 @@ class CombineTtsAudio:
 
         print(f"===== CombineTtsAudio: 全部处理结束 =====\n")
 
-        return (str(output_file),)
+        return (str(output_file), str(parent_dir))
 
 
 NODE_CLASS_MAPPINGS = {
@@ -194,4 +197,3 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CombineTtsAudio": "TTS分片音频合并(自定义前缀+MP3‑ID3)"
 }
-
