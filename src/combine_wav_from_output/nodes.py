@@ -7,7 +7,7 @@ from inspect import cleandoc
 from PIL import Image
 from pydub import AudioSegment
 from mutagen.mp3 import MP3
-from mutagen.id3 import ID3, APIC, TPE1, TALB, TYER
+from mutagen.id3 import ID3, APIC, TPE1, TALB, TYER, USLT, TIT2
 
 
 class CombineTtsAudio:
@@ -18,12 +18,15 @@ class CombineTtsAudio:
     in_suffix：原始分片文件后缀 wav / mp3
     out_format：合并输出格式 wav / mp3
     delete_source：合并完成后是否删除原始分片文件
+    title：【可选】单曲名称，mp3写入ID3 TIT2标题标签
+    lyric_text：【可选】歌词多行字符串；仅mp3生效，写入ID3 USLT内嵌歌词
     cover_image: 【可选】ComfyUI IMAGE张量，用作mp3专辑封面，仅mp3生效
     artist: ID3艺术家标签(mp3 only)
     album: ID3专辑标签(mp3 only)
     year: ID3年份标签(mp3 only)
     trigger：时序触发端口，连接上游输出，保证磁盘文件全部写完再执行合并
 
+    输出：output_audio_path：合成后音频完整磁盘路径
     示例：输入目录 /a/b/02丁香结，输出文件 /a/b/02丁香结.mp3（输出到目录的父级，不放进分片目录内部）
     """
     @classmethod
@@ -45,6 +48,15 @@ class CombineTtsAudio:
                 "trigger": ("*", {"tooltip": "时序触发端口，连接上游节点输出，仅用于等待全部文件保存到磁盘，不读取数据"})
             },
             "optional": {
+                "title": ("STRING", {
+                    "default": "",
+                    "tooltip": "单曲名称，mp3模式写入ID3标题(TIT2)标签；wav忽略"
+                }),
+                "lyric_text": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "tooltip": "歌词文本，多行；输出mp3时写入ID3 USLT内嵌歌词；wav格式忽略此字段"
+                }),
                 "cover_image": ("IMAGE", {"tooltip": "mp3专辑封面图片，接Load Image输出；仅out_format=mp3时生效"}),
                 "artist": ("STRING", {"default": "artist", "tooltip": "ID3 artist 艺术家标签(mp3 only)"}),
                 "album": ("STRING", {"default": "album", "tooltip": "ID3 album 专辑标签(mp3 only)"}),
@@ -52,7 +64,8 @@ class CombineTtsAudio:
             }
         }
 
-    RETURN_TYPES = ()
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("output_audio_path",)
     FUNCTION = "run"
     CATEGORY = "AudioTools"
     OUTPUT_NODE = True
@@ -65,6 +78,8 @@ class CombineTtsAudio:
                   out_format: str,
                   delete_source: bool,
                   trigger,
+                  title="",
+                  lyric_text="",
                   cover_image=None,
                   artist="artist",
                   album="album",
@@ -117,10 +132,25 @@ class CombineTtsAudio:
                 audio_mp3.tags = ID3()
             tags = audio_mp3.tags
 
+            # 单曲标题 TIT2
+            if title.strip():
+                tags["TIT2"] = TIT2(encoding=3, text=title)
+                print(f"ℹ️ MP3标题标签(title): {title}")
+
             # 写入 artist / album / year
             tags["TPE1"] = TPE1(encoding=3, text=artist)
             tags["TALB"] = TALB(encoding=3, text=album)
             tags["TYER"] = TYER(encoding=3, text=year)
+
+            # 写入内嵌歌词 USLT，非同步歌词，语言代码zh
+            if lyric_text.strip():
+                tags["USLT"] = USLT(
+                    encoding=3,
+                    lang="zho",
+                    desc="",
+                    text=lyric_text
+                )
+                print(f"ℹ️ MP3已写入ID3内嵌歌词，字符数：{len(lyric_text)}")
 
             # 处理专辑封面 cover_image: IMAGE tensor [B,H,W,C] float 0~1
             if cover_image is not None:
@@ -141,7 +171,7 @@ class CombineTtsAudio:
                 print(f"ℹ️ MP3已嵌入专辑封面图片")
 
             tags.save(output_file)
-            print(f"✅ MP3 ID3标签写入完成(artist:{artist}, album:{album}, year:{year})")
+            print(f"✅ MP3 ID3标签写入完成(title:{title}, artist:{artist}, album:{album}, year:{year})")
 
         if delete_source:
             print(f"🗑️ 开启删除源分片，开始清理分片文件……")
@@ -153,7 +183,8 @@ class CombineTtsAudio:
                     print(f"⚠️ 删除失败 {f.name}: {str(e)}")
 
         print(f"===== CombineTtsAudio: 全部处理结束 =====\n")
-        return {}
+
+        return (str(output_file),)
 
 
 NODE_CLASS_MAPPINGS = {
@@ -163,3 +194,4 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CombineTtsAudio": "TTS分片音频合并(自定义前缀+MP3‑ID3)"
 }
+
