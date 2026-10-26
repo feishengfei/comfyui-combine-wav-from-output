@@ -19,6 +19,7 @@ class CombineTtsAudio:
     out_format：合并输出格式 wav / mp3
     mp3_bitrate：mp3输出恒定码率，仅mp3生效；腾讯音乐专栏最低要求256k
     force_stereo：开启则强制转为双声道，单声道音频会复制填充左右声道；默认关闭
+    resample_to_44100：开启将音频重采样到44100Hz；24000Hz源想要真正达到256k/320k mp3必须开启
     delete_source：合并完成后是否删除原始分片文件
     title：【可选】单曲名称，mp3写入ID3 TIT2标题标签
     lyric_text：【可选】歌词多行字符串；仅mp3生效，写入ID3 USLT内嵌歌词
@@ -51,8 +52,9 @@ class CombineTtsAudio:
                 "trigger": ("*", {"tooltip": "时序触发端口，连接上游输出，仅用于等待全部文件保存到磁盘，不读取数据"})
             },
             "optional": {
-                "mp3_bitrate": (["128k","192k","256k","320k"], {"default":"256k", "tooltip":"仅out_format=mp3生效；腾讯音乐专栏最低要求256k，CBR恒定码率"}),
+                "mp3_bitrate": (["128k","192k","256k","320k"], {"default":"256k", "tooltip":"仅out_format=mp3生效；腾讯音乐专栏最低要求256k，CBR恒定码率；24k源需要打开resample_to_44100才能达到高码率"}),
                 "force_stereo": ("BOOLEAN", {"default": False, "tooltip":"强制转为双声道；单声道音频会复制内容填充左右声道，腾讯音乐专栏需要立体声，默认关闭"}),
+                "resample_to_44100": ("BOOLEAN", {"default": False, "tooltip":"重采样到44100Hz；24kHz的TTS源，想要真正输出256k/320k mp3必须开启此选项"}),
                 "title": ("STRING", {
                     "default": "",
                     "tooltip": "单曲名称，mp3模式写入ID3标题(TIT2)标签；wav忽略"
@@ -84,6 +86,7 @@ class CombineTtsAudio:
                   trigger,
                   mp3_bitrate="256k",
                   force_stereo=False,
+                  resample_to_44100=False,
                   title="",
                   lyric_text="",
                   cover_image=None,
@@ -129,13 +132,19 @@ class CombineTtsAudio:
             print(f"ℹ️ force_stereo已开启，将音频强制转换为双声道(stereo)")
             combined = combined.set_channels(2)
 
+        # 重采样到44100Hz，解决24k采样率mp3无法输出256k/320k码率的限制
+        if resample_to_44100:
+            old_rate = combined.frame_rate
+            combined = combined.set_frame_rate(44100)
+            print(f"ℹ️ resample_to_44100已开启，采样率 {old_rate} Hz → 44100 Hz")
+
         # 根据输出格式设置码率
         if out_format == "mp3":
             combined.export(output_file, format="mp3", bitrate=mp3_bitrate)
-            print(f"✅ 合并完成，输出文件: {output_file} | mp3 CBR bitrate={mp3_bitrate} | force_stereo={force_stereo}")
+            print(f"✅ 合并完成，输出文件: {output_file} | mp3 CBR bitrate={mp3_bitrate} | force_stereo={force_stereo} | resample_to_44100={resample_to_44100}")
         else:
             combined.export(output_file, format=out_format)
-            print(f"✅ 合并完成，输出文件: {output_file} | force_stereo={force_stereo}")
+            print(f"✅ 合并完成，输出文件: {output_file} | force_stereo={force_stereo} | resample_to_44100={resample_to_44100}")
 
         print(f"ℹ️ 输出音频父目录: {parent_dir}")
 
