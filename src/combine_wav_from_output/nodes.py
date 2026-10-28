@@ -210,11 +210,170 @@ class CombineTtsAudio:
         print(f"===== CombineTtsAudio: 全部处理结束 =====\n")
         return (str(output_file), str(parent_dir))
 
+class Mp3EditID3Tags:
+    """
+    MP3 ID3标签编辑器【独立节点】
+    原地修改磁盘上已存在的mp3文件元信息，不重新编码音频流，速度快
+    规则：输入为空字符串 / None，则保留文件原有标签，不会清空；只有传入非有效值才覆盖对应字段
+    mp3_file_path：待修改mp3绝对磁盘路径
+    trigger：时序触发端口，用于控制执行时机
+    title：单曲标题(TIT2)，空字符串=保留原值
+    lyric_text：多行非同步歌词 USLT(zho中文)，空字符串=保留原值
+    cover_image：ComfyUI IMAGE张量专辑封面；None=不修改原有封面
+    artist：艺术家 TPE1，空字符串=保留原值
+    album：专辑 TALB，空字符串=保留原值
+    year：年份 TYER，空字符串=保留原值
+
+    输出：
+        output_mp3_path：处理完成mp3文件路径（原地修改，和输入路径一致）
+        status_message：处理状态文本日志
+    """
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "mp3_file_path": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "tooltip": "待编辑MP3文件的绝对磁盘路径"
+                }),
+                "trigger": ("*", {"tooltip": "时序触发端口，仅用于工作流等待，不读取数据"})
+            },
+            "optional": {
+                "title": ("STRING", {"default": "", "tooltip": "MP3标题；留空保留原有标签"}),
+                "lyric_text": ("STRING", {"multiline": True, "default": "", "tooltip": "ID3内嵌中文非同步歌词；留空保留原有"}),
+                "cover_image": ("IMAGE", {"tooltip": "专辑封面IMAGE张量；不接入则不修改原有封面"}),
+                "artist": ("STRING", {"default": "", "tooltip": "艺术家；留空保留原有标签"}),
+                "album": ("STRING", {"default": "", "tooltip": "专辑名称；留空保留原有标签"}),
+                "year": ("STRING", {"default": "", "tooltip": "年份；留空保留原有标签"}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("output_mp3_path", "status_message")
+    FUNCTION = "run"
+    CATEGORY = "AudioTools"
+    OUTPUT_NODE = True
+    DESCRIPTION = cleandoc(__doc__)
+
+    async def run(self,
+                  mp3_file_path: str,
+                  trigger,
+                  title="",
+                  lyric_text="",
+                  cover_image=None,
+                  artist="",
+                  album="",
+                  year="year"):
+
+        mp3_path = Path(mp3_file_path).absolute()
+        status_lines = []
+
+        if not mp3_path.exists():
+            msg = f"错误：MP3文件不存在 -> {mp3_path}"
+            print(f"\n❌ Mp3EditID3Tags: {msg}")
+            raise FileNotFoundError(msg)
+        if mp3_path.suffix.lower() != ".mp3":
+            msg = f"错误：输入不是mp3文件，后缀:{mp3_path.suffix}"
+            print(f"\n❌ Mp3EditID3Tags: {msg}")
+            raise ValueError(msg)
+
+        print(f"\n===== Mp3EditID3Tags 开始处理：{mp3_path} =====")
+        status_lines.append(f"开始处理：{str(mp3_path)}")
+
+        audio_mp3 = MP3(mp3_path)
+        # 不存在ID3对象就新建
+        if not audio_mp3.tags:
+            audio_mp3.tags = ID3()
+        tags = audio_mp3.tags
+
+        # TIT2 标题，非空才覆盖
+        if title.strip():
+            tags["TIT2"] = TIT2(encoding=3, text=title.strip())
+            log = f"更新标题(TIT2): {title.strip()}"
+            print(f"ℹ️ {log}")
+            status_lines.append(log)
+        else:
+            status_lines.append("title：保留原始值")
+
+        # TPE1 艺术家
+        if artist.strip():
+            tags["TPE1"] = TPE1(encoding=3, text=artist.strip())
+            log = f"更新艺术家(TPE1): {artist.strip()}"
+            print(f"ℹ️ {log}")
+            status_lines.append(log)
+        else:
+            status_lines.append("artist：保留原始值")
+
+        # TALB 专辑
+        if album.strip():
+            tags["TALB"] = TALB(encoding=3, text=album.strip())
+            log = f"更新专辑(TALB): {album.strip()}"
+            print(f"ℹ️ {log}")
+            status_lines.append(log)
+        else:
+            status_lines.append("album：保留原始值")
+
+        # TYER 年份
+        if year.strip():
+            tags["TYER"] = TYER(encoding=3, text=year.strip())
+            log = f"更新年份(TYER): {year.strip()}"
+            print(f"ℹ️ {log}")
+            status_lines.append(log)
+        else:
+            status_lines.append("year：保留原始值")
+
+        # USLT 中文内嵌歌词，非空才覆盖
+        if lyric_text.strip():
+            tags["USLT"] = USLT(
+                encoding=3,
+                lang="zho",
+                desc="",
+                text=lyric_text
+            )
+            log = f"更新内嵌歌词，字符数：{len(lyric_text)}"
+            print(f"ℹ️ {log}")
+            status_lines.append(log)
+        else:
+            status_lines.append("lyric_text：保留原始值")
+
+        # APIC专辑封面，仅传入图片张量才替换封面；cover_image=None则跳过不修改
+        if cover_image is not None:
+            img_np = (cover_image[0].cpu().numpy() * 255).astype(np.uint8)
+            pil_img = Image.fromarray(img_np)
+            buf = io.BytesIO()
+            pil_img.save(buf, format="PNG")
+            pic_bytes = buf.getvalue()
+            tags.add(APIC(
+                encoding=3,
+                mime="image/png",
+                type=3,
+                desc="Cover",
+                data=pic_bytes
+            ))
+            log = "更新MP3专辑封面图片"
+            print(f"ℹ️ {log}")
+            status_lines.append(log)
+        else:
+            status_lines.append("cover_image：保留原始封面")
+
+        # 原地保存标签到原文件
+        tags.save(mp3_path)
+        done_msg = f"✅ ID3标签原地写入完成 {mp3_path}"
+        print(done_msg)
+        status_lines.append(done_msg)
+        print(f"===== Mp3EditID3Tags 处理结束 =====\n")
+
+        status_msg_out = "\n".join(status_lines)
+        return (str(mp3_path), status_msg_out)
+
 
 NODE_CLASS_MAPPINGS = {
-    "CombineTtsAudio": CombineTtsAudio
+    "CombineTtsAudio": CombineTtsAudio,
+    "Mp3EditID3Tags": Mp3EditID3Tags,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "CombineTtsAudio": "TTS分片音频合并(自定义前缀+MP3‑ID3)"
+    "CombineTtsAudio": "TTS分片音频合并(自定义前缀+MP3‑ID3)",
+    "Mp3EditID3Tags": "MP3 Editor ID3 Tag｜MP3标签编辑器",
 }
