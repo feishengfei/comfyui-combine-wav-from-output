@@ -368,12 +368,139 @@ class Mp3EditID3Tags:
         return (str(mp3_path), status_msg_out)
 
 
+class AudioStreamProcessor:
+    """
+    内存音频张量处理节点，输入输出均为ComfyUI标准AUDIO，串接在SaveAudio之前。
+    全部操作内存张量，不读写磁盘；比特率、文件格式、ID3标签由下游SaveAudio负责。
+    """
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "audio": ("AUDIO", {
+                    "tooltip": "ComfyUI标准AUDIO输入，字典 {waveform:tensor, sample_rate:int}"
+                }),
+            },
+            "optional": {
+                "target_sample_rate": (["22050", "44100", "48000"], {
+                    "default": "44100",
+                    "tooltip": "目标重采样率。音乐平台推荐44100；源采样率与目标一致则跳过重采样。"
+                }),
+                "force_stereo": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "强制转为双声道。单声道音频直接复制通道生成立体声，满足平台上传校验；已是立体声则无动作。"
+                }),
+                "gain_db": ("FLOAT", {
+                    "default": 0.0,
+                    "min": -20.0,
+                    "max": 6.0,
+                    "step": 0.1,
+                    "tooltip": "整体增益(dB)，正值放大音量，负值降低；0为不修改。避免大于+3防止削波爆音。"
+                }),
+                "fade_in_sec": ("FLOAT", {
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 2.0,
+                    "step": 0.01,
+                    "tooltip": "开头淡入时长(秒)，0代表关闭淡入，用于消除音频起始爆音。"
+                }),
+                "fade_out_sec": ("FLOAT", {
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 2.0,
+                    "step": 0.01,
+                    "tooltip": "结尾淡出时长(秒)，0代表关闭淡出，消除音频截断爆音。"
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("AUDIO",)
+    RETURN_NAMES = ("audio",)
+    FUNCTION = "run"
+    CATEGORY = "AudioTools"
+    DESCRIPTION = cleandoc(__doc__)
+
+    def run(self,
+            audio,
+            target_sample_rate="44100",
+            force_stereo=True,
+            gain_db=0.0,
+            fade_in_sec=0.0,
+            fade_out_sec=0.0):
+
+        waveform: torch.Tensor = audio["waveform"]  # shape [B, C, T]
+        src_sr: int = audio["sample_rate"]
+        dst_sr = int(target_sample_rate)
+        device = waveform.device
+
+        print(f"\n===== AudioStreamProcessor =====")
+        print(f"源: sr={src_sr}, shape={list(waveform.shape)}, gain={gain_db}dB")
+
+        # 1. 重采样
+        if src_sr != dst_sr:
+            resampler = torchaudio.transforms.Resample(
+                orig_freq=src_sr,
+                new_freq=dst_sr
+            ).to(device)
+            waveform = resampler(waveform)
+            print(f"ℹ️ 已重采样: {src_sr}Hz → {dst_sr}Hz")
+        else:
+            print(f"ℹ️ 采样率无需转换，保持 {src_sr}Hz")
+
+        # 2. 强制立体声：单声道复制通道 [B,1,T] → [B,2,T]
+        _, ch, _ = waveform.shape
+        if force_stereo and ch == 1:
+            waveform = waveform.repeat(1, 2, 1)
+            print(f"ℹ️ 已强制转为立体声")
+
+        # 3. 增益 gain db: dB转线性系数 gain_lin = 10^(db/20)
+        if abs(gain_db) > 1e-6:
+            gain_lin = 10.0 ** (gain_db / 20.0)
+            waveform = waveform * gain_lin
+            # 钳位防止削波
+            waveform = torch.clamp(waveform, min=-1.0, max=1.0)
+            print(f"ℹ️ 应用增益 {gain_db} dB")
+
+        # 4. 淡入淡出
+        total_samples = waveform.shape[-1]
+
+        # 淡入
+        fade_in_samples = int(fade_in_sec * dst_sr)
+        if fade_in_samples > 0 and fade_in_samples <= total_samples:
+            fade_in = torch.linspace(0.0, 1.0, fade_in_samples, device=device)
+            waveform[..., :fade_in_samples] *= fade_in
+
+        # 淡出
+        fade_out_samples = int(fade_out_sec * dst_sr)
+        if fade_out_samples > 0 and fade_out_samples <= total_samples:
+            fade_out = torch.linspace(1.0, 0.0, fade_out_samples, device=device)
+            waveform[..., -fade_out_samples:] *= fade_out
+
+        if fade_in_sec > 0 or fade_out_sec >0:
+            print(f"ℹ️ 淡入:{fade_in_sec}s 淡出:{fade_out_sec}s")
+
+        print("===== AudioStreamProcessor 处理完成 =====\n")
+
+        out_audio = {
+            "waveform": waveform,
+            "sample_rate": dst_sr
+        }
+        return (out_audio,)
+
+
 NODE_CLASS_MAPPINGS = {
     "CombineTtsAudio": CombineTtsAudio,
     "Mp3EditID3Tags": Mp3EditID3Tags,
+    "AudioStreamProcessor": AudioStreamProcessor,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "CombineTtsAudio": "TTS分片音频合并(自定义前缀+MP3‑ID3)",
     "Mp3EditID3Tags": "MP3 Editor ID3 Tag｜MP3标签编辑器",
+    "AudioStreamProcessor": "Audio 流处理器｜重采样/立体声/增益/淡入淡出",
 }
+# NODE_CLASS_MAPPINGS 内追加
+
+# NODE_DISPLAY_NAME_MAPPINGS 内追加
+
+
